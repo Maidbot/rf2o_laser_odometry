@@ -1167,7 +1167,7 @@ void CLaserOdometry2D::PoseUpdate()
       odom.twist.twist.angular.z = ang_speed;   //angular speed
       //publish the message
 
-      setOdomCovariances(odom);
+      setOdomCovariances(odom, false);
       odom_pub.publish(odom);
     } else {
       ROS_DEBUG("Singularity inferred (limits exceeded) in visual odometry; not updating pose");
@@ -1176,12 +1176,12 @@ void CLaserOdometry2D::PoseUpdate()
     //filter speeds
 }
 
-void CLaserOdometry2D::setOdomCovariances(nav_msgs::Odometry& odom) {
+void CLaserOdometry2D::setOdomCovariances(nav_msgs::Odometry& odom, bool missingData) {
 
   float cov_x = min_linear_cov_;
   float cov_y = min_linear_cov_;
 
-  if(!use_constant_cov_) {
+  if(!use_constant_cov_ && !missingData) {
     float density_x = std::accumulate(x_info_densities_.begin(), x_info_densities_.end(), 0.0f)
       / (float) density_avg_window_;
     float density_y = std::accumulate(y_info_densities_.begin(), y_info_densities_.end(), 0.0f)
@@ -1189,6 +1189,11 @@ void CLaserOdometry2D::setOdomCovariances(nav_msgs::Odometry& odom) {
 
     cov_x += max_linear_cov_ * (1.0 - tanh(density_x / min_info_density_));
     cov_y += max_linear_cov_ * (1.0 - tanh(density_y / min_info_density_));
+  }
+
+  if(missingData) {
+    cov_x = 2.0 * max_linear_cov_;
+    cov_y = 2.0 * max_linear_cov_;
   }
 
   odom.twist.covariance[0] = cov_x;
@@ -1274,7 +1279,7 @@ void CLaserOdometry2D::handleMissingData() {
   odom.twist.twist.linear.y = 0.0;
   odom.twist.twist.angular.z = 0.0;   //angular speed
   //publish the message
-  setOdomCovariances(odom);
+  setOdomCovariances(odom, true);
   odom_pub.publish(odom);
 }
 
@@ -1286,6 +1291,7 @@ int main(int argc, char** argv)
     ros::init(argc, argv, "RF2O_LaserOdom");
 
     CLaserOdometry2D myLaserOdom;
+    bool timeout_has_been_handled = false;
 
     //Main Loop
     //----------
@@ -1299,11 +1305,13 @@ int main(int argc, char** argv)
         {
             //Process odometry estimation
             myLaserOdom.odometryCalculation();
+            timeout_has_been_handled = false;
         }
         else
         {
-          if( myLaserOdom.sensorHasTimedOut() ) {
+          if( myLaserOdom.sensorHasTimedOut() && !timeout_has_been_handled) {
             myLaserOdom.handleMissingData();
+            timeout_has_been_handled = true;
           }
             // ROS_WARN("[rf2o] Waiting for laser_scans.... odom init: %s, scan available : %s",
             //   myLaserOdom.is_initialized() ? "true" : "false",

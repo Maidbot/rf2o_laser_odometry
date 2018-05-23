@@ -99,7 +99,7 @@ protected:
     void initPoseCallBack(const nav_msgs::Odometry::ConstPtr& new_initPose);
 
     void occHistCb(const maidbot_obstacle_identification::OccupancyData::ConstPtr& msg);
-    void setOdomCovariances(nav_msgs::Odometry& odom);
+    void setOdomCovariances(nav_msgs::Odometry& odom, bool missingData=false);
     maidbot_obstacle_identification::OccupancyData occ_hist_;
     std::vector<float> x_info_densities_;
     std::vector<float> y_info_densities_;
