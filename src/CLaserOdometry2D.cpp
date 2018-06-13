@@ -60,7 +60,7 @@ CLaserOdometry2D::CLaserOdometry2D()
     interp_scan_pub_ = pn.advertise<sensor_msgs::LaserScan>("/interpolated_scan", 2);
     laser_sub = n.subscribe<sensor_msgs::LaserScan>(laser_scan_topic,1,&CLaserOdometry2D::LaserCallBack,this);
 
-    occ_hist_sub_ = n.subscribe<maidbot_obstacle_identification::OccupancyData>("/short_range_occupancy",
+    occ_hist_sub_ = n.subscribe<maidbot_spatial_data::OccupancyData>("/short_range_occupancy",
       1, &CLaserOdometry2D::occHistCb, this);
 
     //init pose??
@@ -102,7 +102,7 @@ bool CLaserOdometry2D::scan_available()
     return new_scan_available;
 }
 
-void CLaserOdometry2D::occHistCb(const maidbot_obstacle_identification::OccupancyData::ConstPtr& msg) {
+void CLaserOdometry2D::occHistCb(const maidbot_spatial_data::OccupancyData::ConstPtr& msg) {
   occ_hist_ = *msg;
   x_info_densities_.push_back(msg->information_density.x);
   y_info_densities_.push_back(msg->information_density.y);
