@@ -13,7 +13,6 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   tf
   angles
-  maidbot_spatial_data
 )
 
 ## System dependencies are found with CMake's conventions
@@ -51,7 +50,7 @@ ENDIF()
 catkin_package(
  INCLUDE_DIRS include
  LIBRARIES laser_odometry
- CATKIN_DEPENDS nav_msgs roscpp sensor_msgs std_msgs tf maidbot_spatial_data
+ CATKIN_DEPENDS nav_msgs roscpp sensor_msgs std_msgs tf
  #DEPENDS system_lib
 )
 

@@ -21,6 +21,35 @@ using namespace mrpt::poses;
 using namespace std;
 using namespace Eigen;
 
+//---------------------------------------------
+// Covariance Comuptation Helpers
+//---------------------------------------------
+Line::Line(Point point, float slope_angle)
+      : point_(point), slope_angle_(slope_angle) {
+
+    another_point_.x = point.x + cos(slope_angle_);
+    another_point_.y = point.y + sin(slope_angle_);
+  }
+
+float Line::signedDistanceToPoint(const Point& test_point) {
+  return (test_point.y - point_.y) * (another_point_.x - point_.x)
+    -(test_point.x - point_.x) * (another_point_.y - point_.y);
+}
+
+
+void LinearDensityFunction::initialize(float max_distance, float decay_rate) {
+  max_distance_ = max_distance;
+  decay_rate_ = decay_rate;
+  a_ = decay_rate_ * max_distance_;
+}
+
+float LinearDensityFunction::operator() (const float& r) {
+  if(r <= max_distance_)
+    return (a_ - r * decay_rate_);
+
+  return 0.0;
+}
+
 
 // --------------------------------------------
 // CLaserOdometry2D
@@ -54,14 +83,44 @@ CLaserOdometry2D::CLaserOdometry2D()
     pn.param<int>("odom_avg_window", odom_avg_window_, 4);
     pn.param<bool>("use_constant_cov", use_constant_cov_, false);
 
+    pn.param<float>("density_decay_rate", density_decay_rate_, 0.1f);
+    pn.param<float>("info_density_cutoff_angle", info_density_cutoff_angle_, 0.5f);
+    pn.param<float>("info_density_max_radius", info_density_max_radius_, 1.5f);
+    pn.param<float>("info_density_wedge_radius", info_density_wedge_radius_, 0.25f);
+
+    //Covariance Computation
+    //-------------------------
+    // Setup for info density calculations
+    density_mag_.initialize(info_density_max_radius_, density_decay_rate_);
+    Point x_upper_intercept_, x_lower_intercept_;
+    Point y_upper_intercept_, y_lower_intercept_;
+
+    x_upper_intercept_.x = cos(info_density_cutoff_angle_) * info_density_wedge_radius_;
+    x_upper_intercept_.y = sin(info_density_cutoff_angle_) * info_density_wedge_radius_;
+    x_lower_intercept_.x = cos(-info_density_cutoff_angle_) * info_density_wedge_radius_;
+    x_lower_intercept_.y = sin(-info_density_cutoff_angle_) * info_density_wedge_radius_;
+
+    y_upper_intercept_.x = cos(info_density_cutoff_angle_ + 1.571) * info_density_wedge_radius_;
+    y_upper_intercept_.y = sin(info_density_cutoff_angle_ + 1.571) * info_density_wedge_radius_;
+    y_lower_intercept_.x = cos(-info_density_cutoff_angle_ + 1.571) * info_density_wedge_radius_;
+    y_lower_intercept_.y = sin(-info_density_cutoff_angle_ + 1.571) * info_density_wedge_radius_;
+
+    Line x_lower_bound_(x_lower_intercept_, 0.0);
+    Line x_upper_bound_(x_upper_intercept_, 0.0);
+    Line y_lower_bound_(y_lower_intercept_, 1.571);
+    Line y_upper_bound_(y_upper_intercept_, 1.571);
+
+    x_info_density_bounds_.push_back(x_lower_bound_);
+    x_info_density_bounds_.push_back(x_upper_bound_);
+
+    y_info_density_bounds_.push_back(y_lower_bound_);
+    y_info_density_bounds_.push_back(y_upper_bound_);
+
     //Publishers and Subscribers
     //--------------------------
     odom_pub = pn.advertise<nav_msgs::Odometry>(odom_topic, 5);
     interp_scan_pub_ = pn.advertise<sensor_msgs::LaserScan>("/interpolated_scan", 2);
     laser_sub = n.subscribe<sensor_msgs::LaserScan>(laser_scan_topic,1,&CLaserOdometry2D::LaserCallBack,this);
-
-    occ_hist_sub_ = n.subscribe<maidbot_spatial_data::OccupancyData>("/short_range_occupancy",
-      1, &CLaserOdometry2D::occHistCb, this);
 
     //init pose??
     if (init_pose_from_topic != "")
@@ -100,19 +159,6 @@ bool CLaserOdometry2D::is_initialized()
 bool CLaserOdometry2D::scan_available()
 {
     return new_scan_available;
-}
-
-void CLaserOdometry2D::occHistCb(const maidbot_spatial_data::OccupancyData::ConstPtr& msg) {
-  occ_hist_ = *msg;
-  x_info_densities_.push_back(msg->information_density.x);
-  y_info_densities_.push_back(msg->information_density.y);
-  if(x_info_densities_.size() > density_avg_window_) {
-    x_info_densities_.erase(x_info_densities_.begin(), x_info_densities_.begin() + 1);
-  }
-
-  if(y_info_densities_.size() > density_avg_window_) {
-    y_info_densities_.erase(y_info_densities_.begin(), y_info_densities_.begin() + 1);
-  }
 }
 
 void CLaserOdometry2D::interpolateScanToFixedAngles(
@@ -206,6 +252,69 @@ void CLaserOdometry2D::interpolateScanToFixedAngles(
     // }
   }
 
+}
+
+void CLaserOdometry2D::computeInfoDensity() {
+  float x_density = 0.0;
+  float y_density = 0.0;
+  float cutoff_ratio = cos(info_density_cutoff_angle_);
+  for(int ii=0; ii<last_scan.ranges.size(); ii++) {
+      if(last_scan.ranges[ii] > info_density_max_radius_) {
+        continue;
+      }
+
+      float angle = last_scan.angle_min + ii * last_scan.angle_increment;
+      float cth = cos(angle);
+      float sth = sin(angle);
+      float mag_to_add = density_mag_(last_scan.ranges[ii]);
+
+      // Update the x and y densities....
+      // check if the point should count -- is it at least in the wedge?
+      if(std::abs(cth) >= cutoff_ratio) {
+        if(last_scan.ranges[ii] <= info_density_wedge_radius_) {
+          // within the wedge; include no matter what.
+          x_density += mag_to_add;
+        } else {
+          Point p;
+          p.x = cth;
+          p.y = sth;
+          if(x_info_density_bounds_[0].signedDistanceToPoint(p) >= 0
+              && x_info_density_bounds_[1].signedDistanceToPoint(p) <=0) {
+            x_density += mag_to_add;
+          }
+        }
+      }
+
+      // check if the point should count -- is it at least in the wedge?
+      if(std::abs(sth) >= cutoff_ratio) {
+        if(last_scan.ranges[ii] <= info_density_wedge_radius_) {
+          // within the wedge; include no matter what.
+          y_density += mag_to_add;
+        } else {
+          Point p;
+          p.x = cth;
+          p.y = sth;
+          if(y_info_density_bounds_[0].signedDistanceToPoint(p) >= 0
+              && y_info_density_bounds_[1].signedDistanceToPoint(p) <=0) {
+            y_density += mag_to_add;
+          }
+        }
+      }
+    }
+
+    x_density /= 72.0; // HACK HACK HACK b/c this used to be normalized in the message.
+    y_density /= 72.0; // HACK HACK HACK b/c this used to be normalized in the message.
+
+    x_info_densities_.push_back(x_density);
+    y_info_densities_.push_back(y_density);
+
+    if(x_info_densities_.size() > density_avg_window_) {
+      x_info_densities_.erase(x_info_densities_.begin(), x_info_densities_.begin() + 1);
+    }
+
+    if(y_info_densities_.size() > density_avg_window_) {
+      y_info_densities_.erase(y_info_densities_.begin(), y_info_densities_.begin() + 1);
+    }
 }
 
 void CLaserOdometry2D::Init()
@@ -1233,6 +1342,7 @@ void CLaserOdometry2D::LaserCallBack(const sensor_msgs::LaserScan::ConstPtr& new
             }
             sensor_msgs::LaserScan interpolated_scan; // = *new_scan;
             interpolateScanToFixedAngles(new_scan, interpolated_scan);
+            computeInfoDensity();
 
             interp_scan_pub_.publish(interpolated_scan);
 
