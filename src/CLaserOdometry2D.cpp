@@ -263,7 +263,7 @@ void CLaserOdometry2D::computeInfoDensity() {
         continue;
       }
 
-      float angle = last_scan.angle_min + ii * last_scan.angle_increment;
+      float angle = last_scan.angle_min + ii * last_scan.angle_increment + 3.14159;
       float cth = cos(angle);
       float sth = sin(angle);
       float mag_to_add = density_mag_(last_scan.ranges[ii]);
