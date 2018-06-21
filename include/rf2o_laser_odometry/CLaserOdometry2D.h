@@ -23,7 +23,6 @@
 #include <sensor_msgs/LaserScan.h>
 #include <geometry_msgs/Twist.h>
 #include <angles/angles.h>
-#include <maidbot_obstacle_identification/OccupancyData.h>
 
 // MRPT related headers
 #include <mrpt/version.h>
@@ -56,6 +55,40 @@
 #include <numeric>
 #include <cmath>
 
+struct Point {
+  float x;
+  float y;
+};
+
+struct Line {
+
+  Line(Point point, float slope_angle);
+
+  float signedDistanceToPoint(const Point& test_point);
+
+protected:
+
+  Point point_;
+  Point another_point_;
+  float slope_angle_;
+};
+
+class LinearDensityFunction {
+public:
+  LinearDensityFunction(){}
+
+  virtual void initialize(float max_distance, float decay_rate);
+
+  virtual float operator() (const float& r);
+
+protected:
+  float max_distance_;
+
+  float decay_rate_;
+
+  float a_;
+};
+
 class CLaserOdometry2D
 {
 public:
@@ -86,7 +119,7 @@ protected:
     nav_msgs::Odometry          initial_robot_pose;
 
     //Subscriptions & Publishers
-    ros::Subscriber laser_sub, initPose_sub, occ_hist_sub_;
+    ros::Subscriber laser_sub, initPose_sub;
     ros::Publisher odom_pub, interp_scan_pub_;
 
     double max_angular_speed_;
@@ -98,9 +131,10 @@ protected:
     void LaserCallBack(const sensor_msgs::LaserScan::ConstPtr& new_scan);
     void initPoseCallBack(const nav_msgs::Odometry::ConstPtr& new_initPose);
 
-    void occHistCb(const maidbot_obstacle_identification::OccupancyData::ConstPtr& msg);
     void setOdomCovariances(nav_msgs::Odometry& odom, bool missingData=false);
-    maidbot_obstacle_identification::OccupancyData occ_hist_;
+
+    void computeInfoDensity();
+
     std::vector<float> x_info_densities_;
     std::vector<float> y_info_densities_;
     int density_avg_window_;
@@ -111,6 +145,15 @@ protected:
     float min_linear_cov_;
     double angular_cov_mult_;
     bool use_constant_cov_;
+
+    float density_decay_rate_;
+    float info_density_cutoff_angle_;
+    float info_density_wedge_radius_;
+    float info_density_max_radius_;
+
+    std::vector<Line> x_info_density_bounds_;
+    std::vector<Line> y_info_density_bounds_;
+    LinearDensityFunction density_mag_;
 
     // Internal Data
 	std::vector<Eigen::MatrixXf> range;
